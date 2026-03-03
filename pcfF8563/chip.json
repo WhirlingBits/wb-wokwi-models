@@ -1,0 +1,14 @@
+{
+  "name": "pcf8563",
+  "author": "WhirlingBits",
+  "pins": [
+    "VDD",
+    "VSS",
+    "SDA",
+    "SCL",
+    "INT",
+    "CLKOUT"
+  ],
+  "controls": [
+  ]
+}

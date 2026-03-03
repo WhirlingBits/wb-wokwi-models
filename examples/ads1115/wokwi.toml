@@ -1,0 +1,9 @@
+[wokwi]
+version = 1
+firmware = "build/ads1115.bin"
+elf = "build/ads1115.elf"
+rfc2217ServerPort = 4000
+
+[[chip]]
+name = "ads1115"
+binary = "../../ads1115/chip.wasm"

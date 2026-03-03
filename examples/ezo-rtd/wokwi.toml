@@ -1,0 +1,9 @@
+[wokwi]
+version = 1
+firmware = "build/ezo-rtd-example.bin"
+elf = "build/ezo-rtd-example.elf"
+rfc2217ServerPort = 4000
+
+[[chip]]
+name = "ezo-rtd"
+binary = "../../ezo-rtd/chip.wasm"

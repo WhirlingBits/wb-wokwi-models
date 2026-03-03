@@ -1,0 +1,22 @@
+{
+  "name": "ezo-rtd",
+  "author": "WhirlingBits",
+  "pins": [
+    "VCC",
+    "GND",
+    "TX-SDA",
+    "RX-SCL",
+    "PROBE"
+  ],
+  "controls": [
+    {
+      "type": "slider",
+      "label": "Temperature (centi-degrees: 2500 = 25.00 C)",
+      "min": -20000,
+      "max": 120000,
+      "step": 1,
+      "id": "temperature",
+      "format": "number"
+    }
+  ]
+}

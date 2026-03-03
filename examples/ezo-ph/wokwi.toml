@@ -1,0 +1,9 @@
+[wokwi]
+version = 1
+firmware = "build/ezo-ph-example.bin"
+elf = "build/ezo-ph-example.elf"
+rfc2217ServerPort = 4000
+
+[[chip]]
+name = "ezo-ph"
+binary = "../../ezo-ph/chip.wasm"

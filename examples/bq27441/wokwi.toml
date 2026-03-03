@@ -1,0 +1,9 @@
+[wokwi]
+version = 1
+firmware = "build/bq27441-example.bin"
+elf = "build/bq27441-example.elf"
+rfc2217ServerPort = 4000
+
+[[chip]]
+name = "bq27441"
+binary = "../../bq27441/chip.wasm"

@@ -1,0 +1,9 @@
+[wokwi]
+version = 1
+firmware = "build/pcf8563-example.bin"
+elf = "build/pcf8563-example.elf"
+rfc2217ServerPort = 4000
+
+[[chip]]
+name = "pcf8563"
+binary = "../../pcfF8563/chip.wasm"

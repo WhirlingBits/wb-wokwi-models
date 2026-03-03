@@ -1,0 +1,9 @@
+[wokwi]
+version = 1
+firmware = "build/max17261-example.bin"
+elf = "build/max17261-example.elf"
+rfc2217ServerPort = 4000
+
+[[chip]]
+name = "max17261"
+binary = "../../max17261/chip.wasm"

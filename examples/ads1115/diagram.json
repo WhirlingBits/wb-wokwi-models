@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "author": "WhirlingBits Example",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-s3-devkitc-1", "id": "esp", "top": -0.18, "left": 4.57, "attrs": {} },
+    { "type": "chip-ads1115", "id": "ads1", "top": -38.4, "left": 192, "attrs": {} },
+    {
+      "type": "wokwi-potentiometer",
+      "id": "pot1",
+      "top": -150,
+      "left": 100,
+      "attrs": { "max": "3.3" }
+    }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:4", "ads1:SDA", "green", [ "v0" ] ],
+    [ "esp:5", "ads1:SCL", "blue", [ "v0" ] ],
+    [ "esp:3V3", "ads1:VDD", "red", [ "v20", "h40" ] ],
+    [ "esp:GND", "ads1:GND", "black", [ "v30", "h50" ] ],
+    [ "pot1:SIG", "ads1:A0", "orange", [] ],
+    [ "pot1:VCC", "esp:3V3", "red", [ "h0" ] ],
+    [ "pot1:GND", "esp:GND", "black", [ "h0" ] ]
+  ],
+  "dependencies": {}
+}

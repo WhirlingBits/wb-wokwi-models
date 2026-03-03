@@ -1,0 +1,9 @@
+[wokwi]
+version = 1
+firmware = "build/tca9554-example.bin"
+elf = "build/tca9554-example.elf"
+rfc2217ServerPort = 4000
+
+[[chip]]
+name = "tca9554"
+binary = "../../tca9554/chip.wasm"

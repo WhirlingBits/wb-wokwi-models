@@ -1,0 +1,42 @@
+{
+  "name": "max17261",
+  "author": "WhirlingBits",
+  "pins": [
+    "VDD",
+    "GND",
+    "SCL",
+    "SDA",
+    "ALRT",
+    "THM",
+    "AIN"
+  ],
+  "controls": [
+    {
+      "type": "slider",
+      "label": "State of Charge (%)",
+      "min": 0,
+      "max": 100,
+      "step": 1,
+      "id": "soc",
+      "format": "percent"
+    },
+    {
+      "type": "slider",
+      "label": "Current (mA)",
+      "min": -2000,
+      "max": 2000,
+      "step": 10,
+      "id": "current",
+      "format": "milliampere"
+    },
+    {
+      "type": "slider",
+      "label": "Temperature (C)",
+      "min": -40,
+      "max": 85,
+      "step": 1,
+      "id": "temp",
+      "format": "celsius"
+    }
+  ]
+}

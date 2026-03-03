@@ -1,0 +1,54 @@
+{
+  "name": "ads1115",
+  "author": "WhirlingBits",
+  "pins": [
+    "VDD",
+    "GND",
+    "SCL",
+    "SDA",
+    "ADDR",
+    "ALRT",
+    "A0",
+    "A1",
+    "A2",
+    "A3"
+  ],
+  "controls": [
+    {
+      "type": "slider",
+      "label": "A0 Voltage (V)",
+      "min": 0,
+      "max": 5,
+      "step": 0.1,
+      "id": "v0",
+      "format": "volt"
+    },
+    {
+      "type": "slider",
+      "label": "A1 Voltage (V)",
+      "min": 0,
+      "max": 5,
+      "step": 0.1,
+      "id": "v1",
+      "format": "volt"
+    },
+    {
+      "type": "slider",
+      "label": "A2 Voltage (V)",
+      "min": 0,
+      "max": 5,
+      "step": 0.1,
+      "id": "v2",
+      "format": "volt"
+    },
+    {
+      "type": "slider",
+      "label": "A3 Voltage (V)",
+      "min": 0,
+      "max": 5,
+      "step": 0.1,
+      "id": "v3",
+      "format": "volt"
+    }
+  ]
+}

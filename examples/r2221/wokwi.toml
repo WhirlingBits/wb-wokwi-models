@@ -1,0 +1,9 @@
+[wokwi]
+version = 1
+firmware = "build/r2221-example.bin"
+elf = "build/r2221-example.elf"
+rfc2217ServerPort = 4000
+
+[[chip]]
+name = "r2221"
+binary = "../../r2221/chip.wasm"

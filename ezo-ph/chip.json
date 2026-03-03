@@ -1,0 +1,22 @@
+{
+  "name": "ezo-ph",
+  "author": "WhirlingBits",
+  "pins": [
+    "VCC",
+    "GND",
+    "TX-SDA",
+    "RX-SCL",
+    "PROBE"
+  ],
+  "controls": [
+    {
+      "type": "slider",
+      "label": "pH Keep-Alive (centi-pH: 700 = 7.00)",
+      "min": 0,
+      "max": 1400,
+      "step": 1,
+      "id": "ph",
+      "format": "number"
+    }
+  ]
+}

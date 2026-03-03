@@ -1,0 +1,13 @@
+{
+  "name": "r2221",
+  "author": "WhirlingBits",
+  "pins": [
+    "VDD",
+    "GND",
+    "SCL",
+    "SDA",
+    "INT"
+  ],
+  "controls": [
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "name": "ads7142",
+  "author": "WhirlingBits",
+  "pins": [
+    "VDD",
+    "GND",
+    "SCL",
+    "SDA",
+    "ALERT",
+    "AIN0",
+    "AIN1"
+  ],
+  "controls": [
+    {
+      "type": "slider",
+      "label": "AIN0 Voltage (V)",
+      "min": 0,
+      "max": 3.3,
+      "step": 0.01,
+      "id": "v0",
+      "format": "volt"
+    },
+    {
+      "type": "slider",
+      "label": "AIN1 Voltage (V)",
+      "min": 0,
+      "max": 3.3,
+      "step": 0.01,
+      "id": "v1",
+      "format": "volt"
+    }
+  ]
+}

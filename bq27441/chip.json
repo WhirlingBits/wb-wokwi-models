@@ -1,0 +1,50 @@
+{
+  "name": "bq27441",
+  "author": "WhirlingBits",
+  "pins": [
+    "VDD",
+    "GND",
+    "SCL",
+    "SDA",
+    "GPOUT",
+    "BIN"
+  ],
+  "controls": [
+    {
+      "type": "slider",
+      "label": "State of Charge (%)",
+      "min": 0,
+      "max": 100,
+      "step": 1,
+      "id": "soc",
+      "format": "percent"
+    },
+    {
+      "type": "slider",
+      "label": "Voltage (mV)",
+      "min": 2500,
+      "max": 4500,
+      "step": 10,
+      "id": "voltage",
+      "format": "number"
+    },
+    {
+      "type": "slider",
+      "label": "Current (mA)",
+      "min": -2000,
+      "max": 2000,
+      "step": 10,
+      "id": "current",
+      "format": "milliampere"
+    },
+    {
+      "type": "slider",
+      "label": "Temperature (C)",
+      "min": -40,
+      "max": 85,
+      "step": 1,
+      "id": "temp",
+      "format": "celsius"
+    }
+  ]
+}

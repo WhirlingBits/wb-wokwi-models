@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "author": "WhirlingBits Example",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-s3-devkitc-1", "id": "esp", "top": -0.18, "left": 4.57, "attrs": {} },
+    { "type": "chip-r2221", "id": "rtc", "top": -38.4, "left": 230, "attrs": {} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:4", "rtc:SDA", "green", [ "v0" ] ],
+    [ "esp:5", "rtc:SCL", "blue", [ "v0" ] ],
+    [ "esp:3V3", "rtc:VDD", "red", [ "v20", "h40" ] ],
+    [ "esp:GND", "rtc:GND", "black", [ "v30", "h50" ] ]
+  ],
+  "dependencies": {}
+}

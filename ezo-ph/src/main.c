@@ -48,19 +48,26 @@
 #define CMD_BUF_SIZE      40
 #define RESP_BUF_SIZE     40
 
-/* Processing delays (microseconds) matching driver expectations */
-#define DELAY_READ_US     (900 * 1000)
-#define DELAY_CAL_US      (900 * 1000)
-#define DELAY_GENERIC_US  (300 * 1000)
+/* Processing delays (microseconds).
+ * These must be SHORTER than the firmware wait times so the
+ * response is ready before the master reads.  The real EZO
+ * chip specifies maximum processing times; the firmware pads
+ * its delay accordingly.  Using ~50 % of the datasheet values
+ * avoids the race where timer and vTaskDelay expire on the
+ * same simulation tick.                                       */
+#define DELAY_READ_US     (450 * 1000)
+#define DELAY_CAL_US      (450 * 1000)
+#define DELAY_GENERIC_US  (150 * 1000)
 
 /* ── Chip State ───────────────────────────────────────────────────────── */
 
 typedef struct {
-  /* Pins (only functionally used ones) */
+  /* Pins */
   pin_t pin_sda;
   pin_t pin_scl;
+  pin_t pin_probe;    /* PROBE – analog input from potentiometer */
 
-  /* Wokwi attribute: pH in centi-pH */
+  /* Wokwi attribute: pH in centi-pH (fallback when no probe) */
   uint32_t attr_ph;
 
   /* Command buffer (filled during I2C writes) */
@@ -113,8 +120,18 @@ static void execute_command(chip_state_t *chip) {
 
   /* --- R: Read pH --------------------------------------------------- */
   if (strcmp(cmd, "R") == 0) {
-    uint32_t raw = attr_read(chip->attr_ph);
-    float ph_val = (float)raw / 100.0f;
+    float ph_val;
+    float probe_v = pin_adc_read(chip->pin_probe);
+    if (probe_v > 0.01f) {
+      /* Map 0 – 3.3 V  →  0 – 14 pH */
+      ph_val = (probe_v / 3.3f) * 14.0f;
+      if (ph_val < 0.0f)  ph_val = 0.0f;
+      if (ph_val > 14.0f) ph_val = 14.0f;
+    } else {
+      /* Fallback: use slider attribute (centi-pH) */
+      uint32_t raw = attr_read(chip->attr_ph);
+      ph_val = (float)raw / 100.0f;
+    }
     sprintf(chip->resp_buf, "%.2f", (double)ph_val);
 
   /* --- Cal: Calibration --------------------------------------------- */
@@ -267,19 +284,28 @@ static bool on_i2c_write(void *user_data, uint8_t data) {
 static void on_i2c_disconnect(void *user_data) {
   chip_state_t *chip = (chip_state_t *)user_data;
 
-  /* If we received a command, start processing with appropriate delay */
-  if (chip->cmd_len > 0 && !chip->processing) {
+  /* If we received a command, start processing with appropriate delay.
+   * If a previous command is still processing (timer in flight), cancel
+   * it and start a fresh timer for the new command — the cmd_buf has
+   * already been overwritten by the new write transaction.             */
+  if (chip->cmd_len > 0) {
     chip->processing = true;
     chip->status_code = STATUS_PENDING;
 
-    /* Determine processing delay based on command */
-    char first = chip->cmd_buf[0];
-    if (first >= 'a' && first <= 'z') first -= 32;
+    /* Determine processing delay based on command type.
+     * Cal,? and T,? are queries — use the short generic delay,
+     * not the long calibration delay.                          */
+    char upper[CMD_BUF_SIZE];
+    int  ulen = chip->cmd_len < CMD_BUF_SIZE ? chip->cmd_len : CMD_BUF_SIZE - 1;
+    memcpy(upper, chip->cmd_buf, ulen);
+    upper[ulen] = '\0';
+    str_to_upper(upper, ulen);
 
     uint32_t delay_us = DELAY_GENERIC_US;
-    if (first == 'R') {
+    if (upper[0] == 'R' && ulen == 1) {
       delay_us = DELAY_READ_US;
-    } else if (first == 'C') {
+    } else if (strncmp(upper, "CAL,", 4) == 0 && strcmp(&upper[4], "?") != 0) {
+      /* Actual calibration operations (not the query) */
       delay_us = DELAY_CAL_US;
     }
 
@@ -293,10 +319,11 @@ void chip_init(void) {
   chip_state_t *chip = calloc(1, sizeof(chip_state_t));
 
   /* Pins */
-  chip->pin_sda = pin_init("TX-SDA", INPUT);
-  chip->pin_scl = pin_init("RX-SCL", INPUT);
+  chip->pin_sda   = pin_init("TX-SDA", INPUT);
+  chip->pin_scl   = pin_init("RX-SCL", INPUT);
+  chip->pin_probe = pin_init("PROBE",  ANALOG);
 
-  /* Attribute: pH in centi-pH (default 7.00) */
+  /* Attribute: pH in centi-pH (fallback, default 7.00) */
   chip->attr_ph = attr_init("ph", 700);
 
   /* Default device state */
@@ -327,5 +354,5 @@ void chip_init(void) {
   };
   i2c_init(&i2c_cfg);
 
-  printf("EZO-pH initialized at 0x%02X\n", EZO_PH_ADDR);
+  printf("EZO-pH initialized at 0x%02X (probe on ANALOG pin)\n", EZO_PH_ADDR);
 }

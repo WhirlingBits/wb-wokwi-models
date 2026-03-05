@@ -10,6 +10,13 @@
       "top": -90,
       "left": 200,
       "attrs": { "ph": "700" }
+    },
+    {
+      "type": "wokwi-potentiometer",
+      "id": "pot1",
+      "top": -90,
+      "left": 380,
+      "attrs": {}
     }
   ],
   "connections": [
@@ -18,7 +25,10 @@
     [ "esp:4", "ph1:TX-SDA", "green", [ "v0" ] ],
     [ "esp:5", "ph1:RX-SCL", "blue", [ "v0" ] ],
     [ "esp:3V3", "ph1:VCC", "red", [ "v20", "h40" ] ],
-    [ "esp:GND", "ph1:GND", "black", [ "v30", "h50" ] ]
+    [ "esp:GND", "ph1:GND", "black", [ "v30", "h50" ] ],
+    [ "pot1:SIG", "ph1:PROBE", "orange", [ "v0" ] ],
+    [ "pot1:VCC", "esp:3V3", "red", [ "v0" ] ],
+    [ "pot1:GND", "esp:GND", "black", [ "v0" ] ]
   ],
   "dependencies": {}
 }

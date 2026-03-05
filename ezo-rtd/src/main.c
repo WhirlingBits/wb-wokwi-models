@@ -47,10 +47,14 @@
 #define CMD_BUF_SIZE      40
 #define RESP_BUF_SIZE     40
 
-/* Processing delays (microseconds) matching driver expectations */
-#define DELAY_READ_US     (600 * 1000)
-#define DELAY_CAL_US      (600 * 1000)
-#define DELAY_GENERIC_US  (300 * 1000)
+/* Processing delays (microseconds).
+ * These must be SHORTER than the firmware wait times so the
+ * response is ready before the master reads.  Using ~50 % of
+ * the datasheet values avoids the race where timer and
+ * vTaskDelay expire on the same simulation tick.              */
+#define DELAY_READ_US     (300 * 1000)
+#define DELAY_CAL_US      (300 * 1000)
+#define DELAY_GENERIC_US  (150 * 1000)
 
 /* Temperature scales */
 #define SCALE_CELSIUS     'C'
@@ -60,11 +64,12 @@
 /* ── Chip State ───────────────────────────────────────────────────────── */
 
 typedef struct {
-  /* Pins (only functionally used ones) */
+  /* Pins */
   pin_t pin_sda;
   pin_t pin_scl;
+  pin_t pin_probe;    /* PROBE – analog input from potentiometer */
 
-  /* Wokwi attribute: temperature in centi-degrees */
+  /* Wokwi attribute: temperature in centi-degrees (fallback) */
   uint32_t attr_temp;
 
   /* Command buffer (filled during I2C writes) */
@@ -124,8 +129,16 @@ static void execute_command(chip_state_t *chip) {
 
   /* --- R: Read temperature ------------------------------------------ */
   if (strcmp(cmd, "R") == 0) {
-    int32_t raw = (int32_t)attr_read(chip->attr_temp);
-    float temp_c = (float)raw / 100.0f;
+    float temp_c;
+    float probe_v = pin_adc_read(chip->pin_probe);
+    if (probe_v > 0.01f) {
+      /* Map 0 – 3.3 V  →  -20 – +120 °C */
+      temp_c = -20.0f + (probe_v / 3.3f) * 140.0f;
+    } else {
+      /* Fallback: use slider attribute (centi-degrees) */
+      int32_t raw = (int32_t)attr_read(chip->attr_temp);
+      temp_c = (float)raw / 100.0f;
+    }
     float val = celsius_to_scale(temp_c, chip->scale);
     sprintf(chip->resp_buf, "%.2f", (double)val);
 
@@ -277,19 +290,25 @@ static bool on_i2c_write(void *user_data, uint8_t data) {
 static void on_i2c_disconnect(void *user_data) {
   chip_state_t *chip = (chip_state_t *)user_data;
 
-  /* If we received a command, start processing with appropriate delay */
-  if (chip->cmd_len > 0 && !chip->processing) {
+  /* If we received a command, start processing with appropriate delay.
+   * If a previous command is still processing, restart the timer
+   * for the new command (cmd_buf was already overwritten).          */
+  if (chip->cmd_len > 0) {
     chip->processing = true;
     chip->status_code = STATUS_PENDING;
 
-    /* Determine processing delay based on command */
-    char first = chip->cmd_buf[0];
-    if (first >= 'a' && first <= 'z') first -= 32;
+    /* Determine processing delay based on command type.
+     * Cal,? is a query — use the short generic delay.  */
+    char upper[CMD_BUF_SIZE];
+    int  ulen = chip->cmd_len < CMD_BUF_SIZE ? chip->cmd_len : CMD_BUF_SIZE - 1;
+    memcpy(upper, chip->cmd_buf, ulen);
+    upper[ulen] = '\0';
+    str_to_upper(upper, ulen);
 
     uint32_t delay_us = DELAY_GENERIC_US;
-    if (first == 'R') {
+    if (upper[0] == 'R' && ulen == 1) {
       delay_us = DELAY_READ_US;
-    } else if (first == 'C') {
+    } else if (strncmp(upper, "CAL,", 4) == 0 && strcmp(&upper[4], "?") != 0) {
       delay_us = DELAY_CAL_US;
     }
 
@@ -303,10 +322,11 @@ void chip_init(void) {
   chip_state_t *chip = calloc(1, sizeof(chip_state_t));
 
   /* Pins */
-  chip->pin_sda = pin_init("TX-SDA", INPUT);
-  chip->pin_scl = pin_init("RX-SCL", INPUT);
+  chip->pin_sda   = pin_init("TX-SDA", INPUT);
+  chip->pin_scl   = pin_init("RX-SCL", INPUT);
+  chip->pin_probe = pin_init("PROBE",  ANALOG);
 
-  /* Attribute: temperature in centi-degrees (default 25.00°C) */
+  /* Attribute: temperature in centi-degrees (fallback, default 25.00°C) */
   chip->attr_temp = attr_init("temperature", 2500);
 
   /* Default device state */
@@ -336,5 +356,5 @@ void chip_init(void) {
   };
   i2c_init(&i2c_cfg);
 
-  printf("EZO-RTD initialized at 0x%02X\n", EZO_RTD_ADDR);
+  printf("EZO-RTD initialized at 0x%02X (probe on ANALOG pin)\n", EZO_RTD_ADDR);
 }

@@ -35,9 +35,9 @@
  *   0x0042  SOFT_RESET
  *   0x0043  EXIT_CFGUPDATE
  *
- * Extended Data (0x3C–0x60):
- *   0x3C  OPCONFIG      Operating configuration
- *   0x3D  OPCONFIG_MSB
+ * Extended Data (0x3A–0x61):
+ *   0x3A  OPCONFIG      Operating configuration (word)
+ *   0x3C  DESIGN_CAP    Design capacity (word)
  *   0x3E  DATACLASS
  *   0x3F  DATABLOCK
  *   0x40–0x5F BLOCKDATA (32 bytes)
@@ -46,10 +46,12 @@
  *
  * Flags Register (0x06) bits:
  *   Bit 0:  DSG  (Discharging)
+ *   Bit 1:  SOCF (SOC final threshold)
  *   Bit 2:  SOC1 (SOC threshold 1)
- *   Bit 3:  SOCF (SOC final threshold)
- *   Bit 4:  ITPOR (POR detected)
- *   Bit 5:  CFGUPMODE (Config update mode)
+ *   Bit 3:  BAT_DET (Battery detected)
+ *   Bit 4:  CFGUPMODE (Config update mode)
+ *   Bit 5:  ITPOR (POR detected)
+ *   Bit 7:  OCVTAKEN (OCV measurement complete)
  *   Bit 8:  CHG  (Charging detected)
  *   Bit 9:  FC   (Full charge)
  *   Bit 14: UT   (Under-temperature)
@@ -126,12 +128,14 @@
 #define CTL_EXIT_RESIM        0x0044
 #define CTL_UNSEAL_KEY        0x8000
 
-/* Flags register bits */
+/* Flags register bits (matches TI datasheet Table 4-4) */
 #define FLAG_DSG              (1 << 0)
+#define FLAG_SOCF             (1 << 1)
 #define FLAG_SOC1             (1 << 2)
-#define FLAG_SOCF             (1 << 3)
-#define FLAG_ITPOR            (1 << 4)
-#define FLAG_CFGUPMODE        (1 << 5)
+#define FLAG_BAT_DET          (1 << 3)
+#define FLAG_CFGUPMODE        (1 << 4)
+#define FLAG_ITPOR            (1 << 5)
+#define FLAG_OCVTAKEN         (1 << 7)
 #define FLAG_CHG              (1 << 8)
 #define FLAG_FC               (1 << 9)
 #define FLAG_UT               (1 << 14)
@@ -183,6 +187,9 @@ typedef struct {
   uint16_t control_status;
   bool     cfg_update_mode;
   bool     sealed;
+  uint8_t  unseal_step;    /* 0 = locked, 1 = first key received */
+  bool     itpor;          /* POR (Power-On Reset) flag */
+  uint16_t opconfig;       /* OpConfig register (0x3A) */
 
   /* Extended data block */
   uint8_t  data_class;
@@ -243,55 +250,77 @@ static void process_control_subcmd(chip_state_t *chip) {
 
     case CTL_SET_CFGUPDATE:
       chip->cfg_update_mode = true;
-      chip->ctl_data = 0x0000;
+      chip->ctl_data = chip->control_status;
       break;
 
     case CTL_EXIT_CFGUPDATE:
       chip->cfg_update_mode = false;
-      chip->ctl_data = 0x0000;
+      chip->ctl_data = chip->control_status;
       break;
 
     case CTL_SOFT_RESET:
       chip->cfg_update_mode = false;
-      chip->ctl_data = 0x0000;
+      chip->itpor = false;  /* SOFT_RESET clears ITPOR */
+      chip->ctl_data = chip->control_status;
+      break;
+
+    case CTL_EXIT_RESIM:
+      chip->cfg_update_mode = false;
+      chip->ctl_data = chip->control_status;
       break;
 
     case CTL_RESET:
       chip->cfg_update_mode = false;
+      chip->itpor = true;   /* Hardware reset sets ITPOR */
       chip->sealed = true;
+      chip->unseal_step = 0;
       chip->control_status = STATUS_SS | STATUS_INITCOMP | STATUS_VOK;
-      chip->ctl_data = 0x0000;
+      chip->ctl_data = chip->control_status;
       break;
 
     case CTL_SEALED:
       chip->sealed = true;
+      chip->unseal_step = 0;
       chip->control_status |= STATUS_SS;
-      chip->ctl_data = 0x0000;
+      chip->ctl_data = chip->control_status;
       break;
 
     case CTL_UNSEAL_KEY:
-      chip->sealed = false;
-      chip->control_status &= ~STATUS_SS;
-      chip->ctl_data = 0x0000;
+      /* Real BQ27441 requires the unseal key (0x8000) sent twice */
+      if (chip->unseal_step == 0) {
+        chip->unseal_step = 1;
+      } else {
+        chip->sealed = false;
+        chip->unseal_step = 0;
+        chip->control_status &= ~STATUS_SS;
+      }
+      chip->ctl_data = chip->control_status;
       break;
 
     case CTL_TOGGLE_GPOUT:
       pin_write(chip->pin_gpout, !pin_read(chip->pin_gpout));
-      chip->ctl_data = 0x0000;
+      chip->ctl_data = chip->control_status;
+      break;
+
+    case CTL_BAT_INSERT:
+    case CTL_BAT_REMOVE:
+    case CTL_SHUTDOWN_ENABLE:
+    case CTL_SHUTDOWN:
+      chip->ctl_data = chip->control_status;
       break;
 
     case CTL_SET_HIBERNATE:
       chip->control_status |= STATUS_HIBERNATE;
-      chip->ctl_data = 0x0000;
+      chip->ctl_data = chip->control_status;
       break;
 
     case CTL_CLEAR_HIBERNATE:
       chip->control_status &= ~STATUS_HIBERNATE;
-      chip->ctl_data = 0x0000;
+      chip->ctl_data = chip->control_status;
       break;
 
     default:
-      chip->ctl_data = 0x0000;
+      chip->ctl_data = chip->control_status;
       break;
   }
 }
@@ -328,9 +357,9 @@ static void load_block_data(chip_state_t *chip) {
     /* Offset 3: SOCF Clear Threshold */
     chip->block_data[3] = 10;
   } else if (chip->data_class == CLASS_REGISTERS && chip->data_block == 0) {
-    /* Offset 0-1: OpConfig (default 0x2F80) */
-    chip->block_data[0] = 0x2F;
-    chip->block_data[1] = 0x80;
+    /* Offset 0-1: OpConfig (use current value) */
+    chip->block_data[0] = (chip->opconfig >> 8) & 0xFF;
+    chip->block_data[1] = chip->opconfig & 0xFF;
   }
 
   /* Copy to register space at 0x40-0x5F */
@@ -374,7 +403,7 @@ static void update_registers(void *user_data) {
   uint16_t soh = 0x0064; /* Low byte = 100%, high byte = 0 (status OK) */
 
   /* Flags */
-  uint16_t flags = 0;
+  uint16_t flags = FLAG_BAT_DET;  /* battery always detected in sim */
   if (current_ma < 0)  flags |= FLAG_DSG;
   if (current_ma > 0)  flags |= FLAG_CHG;
   if (soc >= 100)      flags |= FLAG_FC;
@@ -383,6 +412,8 @@ static void update_registers(void *user_data) {
   if (temp_c < -20)    flags |= FLAG_UT;
   if (temp_c > 60)     flags |= FLAG_OT;
   if (chip->cfg_update_mode) flags |= FLAG_CFGUPMODE;
+  if (chip->itpor) flags |= FLAG_ITPOR;
+  flags |= FLAG_OCVTAKEN;  /* OCV measurement always complete in sim */
 
   /* Write standard registers */
   write_word(chip, REG_TEMPERATURE,      temp_01k);
@@ -406,6 +437,10 @@ static void update_registers(void *user_data) {
   write_word(chip, REG_FULL_CAP_UNFIL,   full_cap);
   write_word(chip, REG_FULL_CAP_FIL,     full_cap);
   write_word(chip, REG_SOC_UNFIL,        (uint16_t)soc);
+
+  /* Extended data registers (directly readable) */
+  write_word(chip, REG_OPCONFIG,         chip->opconfig);
+  write_word(chip, REG_DESIGN_CAP,       DESIGN_CAPACITY);
 
   /* Update control status */
   chip->control_status &= ~(STATUS_SLEEP);
@@ -500,8 +535,12 @@ static bool on_i2c_write(void *user_data, uint8_t data) {
     /* BlockDataControl enable — just acknowledge */
     chip->write_count++;
   } else if (chip->addr_ptr == REG_CHECKSUM) {
-    /* Checksum write — acknowledge */
+    /* Checksum write — apply block data changes */
     chip->regs[REG_CHECKSUM] = data;
+    /* If class 64 was written, apply OpConfig changes */
+    if (chip->data_class == CLASS_REGISTERS && chip->data_block == 0) {
+      chip->opconfig = ((uint16_t)chip->block_data[0] << 8) | chip->block_data[1];
+    }
     chip->write_count++;
   } else if (chip->addr_ptr >= REG_BLOCKDATA && chip->addr_ptr < REG_BLOCKDATA + 32) {
     /* Write to block data area */
@@ -550,8 +589,11 @@ void chip_init(void) {
 
   /* Initial device state */
   chip->sealed = true;
+  chip->unseal_step = 0;
+  chip->itpor = true;  /* POR flag set on power-on */
   chip->cfg_update_mode = false;
   chip->control_status = STATUS_SS | STATUS_INITCOMP | STATUS_VOK;
+  chip->opconfig = 0x2F80;  /* default OpConfig */
 
   /* Initial register update */
   memset(chip->regs, 0, REG_SPACE_SIZE);

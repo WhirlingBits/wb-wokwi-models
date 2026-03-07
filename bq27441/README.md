@@ -4,19 +4,33 @@ Simulation model for the Texas Instruments **BQ27441-G1**, a System-Side Impedan
 
 ## Features
 
-*   **Communication**: I2C Interface (Default Address `0x55`).
-*   **Simulation**:
-    *   Simulates battery parameters: Voltage, State of Charge (SOC), Current, Temperature.
-    *   Implements Standard Commands and Extended Data blocks.
+*   **Communication**: I2C Interface (Fixed Address `0x55`).
+*   **Standard Commands**: Voltage, Current, SOC, Temperature, Flags, Capacity, Power, SOH — all as 16-bit little-endian word reads.
+*   **Control Subcommands**: DEVICE_TYPE (`0x0421`), FW_VERSION (`0x0109`), CHEM_ID (`0x0128`), CONTROL_STATUS, SET_CFGUPDATE, EXIT_CFGUPDATE, SOFT_RESET, RESET, SEALED, UNSEAL (two-step), TOGGLE_GPOUT, SET/CLEAR_HIBERNATE.
+*   **Extended Data**: Full block read/write support for data classes 82 (State), 49 (Discharge), 64 (Registers/OpConfig) with checksum validation.
+*   **Flags Register**: DSG, SOCF, SOC1, BAT_DET, CFGUPMODE, ITPOR, OCVTAKEN, CHG, FC, UT, OT — correct bit positions per TI datasheet.
+*   **OpConfig**: Directly readable at `0x3A`, writable via extended data class 64.
+*   **Design Capacity**: Directly readable at `0x3C`.
+*   **GPOUT Pin**: Active-low battery alert output, toggleable via subcommand.
+*   **Two-Step Unseal**: Requires writing `0x8000` twice (matches real hardware).
+*   **ITPOR**: Power-On Reset flag set on init, cleared by SOFT_RESET.
 
 ## Controls
 
-The simulation exposes Wokwi attributes/sliders to modify battery state in real-time:
-*   **Voltage** (mV)
-*   **State of Charge** (%)
-*   **Current** (mA)
-*   **Temperature** (0.1°K or °C depending on `chip.json`)
+| Slider              | Range         | Unit | Description                    |
+|---------------------|---------------|------|--------------------------------|
+| State of Charge (%) | 0–100         | %    | Battery SOC                    |
+| Voltage (mV)        | 2500–4500     | mV   | Battery voltage                |
+| Current (mA)        | -2000 – 2000  | mA   | Charge (+) / Discharge (-)     |
+| Temperature (C)     | -40 – 85      | °C   | Battery temperature            |
 
-## Usage
+## Pins
 
-Connect to your microcontroller's I2C bus to read battery telemetry. Great for testing power management logic without a real battery.
+| Pin   | Description                        |
+|-------|------------------------------------|
+| VDD   | Power Supply                       |
+| GND   | Ground                             |
+| SCL   | I2C Clock                          |
+| SDA   | I2C Data                           |
+| GPOUT | Battery alert output (active-low)  |
+| BIN   | Battery insert detect              |

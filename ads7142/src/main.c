@@ -2,12 +2,15 @@
  * ADS7142 Nanopower Dual-Channel 12-Bit SAR ADC – Wokwi Custom Chip
  *
  * Simulates the TI ADS7142 I2C ADC with:
- *   - Opcode-based protocol (SINGLE_READ/WRITE, SET_BIT, CLEAR_BIT, BLOCK_READ)
+ *   - Opcode-based protocol (SINGLE_READ/WRITE, SET_BIT, CLEAR_BIT,
+ *     BLOCK_READ, BLOCK_WRITE)
  *   - Full register map matching the datasheet
  *   - 12-bit conversion results from two slider-controlled channels
  *   - Data FIFO with configurable output format
- *   - Digital Window Comparator (DWC) with ALERT pin
- *   - Accumulator registers
+ *   - DATA_BUFFER_OPMODE: Stop-Burst, Start-Burst, Pre-Alert, Post-Alert
+ *   - Digital Window Comparator (DWC) with hysteresis and ALERT pin
+ *   - Accumulator with configurable sample count (1/4/8/16)
+ *   - Pre-alert event counter
  *   - Device reset via WKEY / DEVICE_RESET sequence
  *   - Manual, Autonomous, and High-Precision operating modes
  *
@@ -102,11 +105,18 @@
 #define VREF                    3.3f
 #define ADC_MAX                 4095
 
+/* ── DATA_BUFFER_OPMODE values ──────────────────────────────────── */
+#define DBUF_STOP_BURST         0x00
+#define DBUF_START_BURST        0x01
+#define DBUF_PRE_ALERT          0x04
+#define DBUF_POST_ALERT         0x06
+
 /* ── I2C Write State Machine ────────────────────────────────────── */
 enum {
-    STATE_IDLE = 0,         /* Expect opcode byte         */
-    STATE_EXPECT_ADDR,      /* Expect register / count    */
-    STATE_EXPECT_DATA,      /* Expect data byte           */
+    STATE_IDLE = 0,         /* Expect opcode byte              */
+    STATE_EXPECT_ADDR,      /* Expect register / count         */
+    STATE_EXPECT_DATA,      /* Expect data byte                */
+    STATE_BLOCK_WRITE_DATA, /* Receiving block-write bytes     */
 };
 
 /* ── Chip State ─────────────────────────────────────────────────── */
@@ -127,10 +137,21 @@ typedef struct {
     uint8_t state;
     uint8_t current_opcode;
     uint8_t current_reg;
+    uint8_t block_write_remaining; /* bytes left in block write */
 
     /* Device state */
     bool    sequence_running;
     bool    wkey_unlocked;
+
+    /* Accumulator state (32-bit to support sum of up to 16 × 12-bit) */
+    uint32_t acc_ch0;
+    uint32_t acc_ch1;
+    uint8_t  acc_sample_count_ch0;
+    uint8_t  acc_sample_count_ch1;
+
+    /* Pre-alert event counter */
+    uint8_t  pre_alert_evt_count;
+    bool     alert_triggered;       /* latched alert state */
 
     timer_t convert_timer;
 } chip_state_t;
@@ -150,11 +171,30 @@ static uint16_t voltage_to_adc(float v) {
     return (uint16_t)raw;
 }
 
+/* Return the number of accumulation samples from ACC_EN bits [3:2]. */
+static uint8_t acc_num_samples(uint8_t acc_en_val) {
+    switch ((acc_en_val >> 2) & 0x03) {
+    case 0: return 1;
+    case 1: return 4;
+    case 2: return 8;
+    case 3: return 16;
+    }
+    return 1;
+}
+
 /* ── I2C Callbacks ──────────────────────────────────────────────── */
 
 static bool on_i2c_connect(void *user_data, uint32_t address, bool connect) {
+    chip_state_t *chip = (chip_state_t *)user_data;
     (void)address;
-    (void)connect;
+
+    if (connect) {
+        /* Reset FIFO read pointer at the start of every read transaction
+           so that a raw i2c_master_receive() always starts from sample 0. */
+        if (chip->current_opcode != OP_SINGLE_READ) {
+            chip->fifo_rd_idx = 0;
+        }
+    }
     /* Keep current_opcode across STOP → START so that a SINGLE_REG_READ
        write-phase ([opcode][addr] STOP) is still remembered in the
        following read-phase (START [addr+R] [data] STOP).               */
@@ -197,6 +237,10 @@ static bool on_i2c_write(void *user_data, uint8_t data) {
             /* Byte is the sample count — prepare FIFO read pointer */
             chip->fifo_rd_idx = 0;
             chip->state = STATE_IDLE;
+        } else if (chip->current_opcode == OP_BLOCK_WRITE) {
+            /* First byte after opcode = starting register address */
+            chip->current_reg = data;
+            chip->state = STATE_BLOCK_WRITE_DATA;
         } else {
             chip->current_reg = data;
             if (chip->current_opcode == OP_SINGLE_READ) {
@@ -208,6 +252,18 @@ static bool on_i2c_write(void *user_data, uint8_t data) {
             }
         }
         break;
+
+    /* ── Block-write data bytes (auto-increment register) ───────── */
+    case STATE_BLOCK_WRITE_DATA:
+    {
+        uint8_t reg = chip->current_reg;
+        if (reg < REG_SPACE_SIZE) {
+            chip->regs[reg] = data;
+        }
+        chip->current_reg = reg + 1;
+        /* Stay in this state until STOP (disconnect resets to IDLE) */
+        break;
+    }
 
     /* ── Byte 2: Data ───────────────────────────────────────────── */
     case STATE_EXPECT_DATA:
@@ -230,7 +286,16 @@ static bool on_i2c_write(void *user_data, uint8_t data) {
                 } else if (reg == REG_START_SEQUENCE) {
                     if (data & 0x01) {
                         chip->sequence_running = true;
-                        chip->regs[REG_SEQUENCE_STATUS] = 0x01;
+                        /* Real device: 0x02 = sequence enabled, no error */
+                        chip->regs[REG_SEQUENCE_STATUS] = 0x02;
+                        /* Reset pre-alert event counter */
+                        chip->pre_alert_evt_count = 0;
+                        chip->alert_triggered = false;
+                        /* Reset accumulators */
+                        chip->acc_ch0 = 0;
+                        chip->acc_ch1 = 0;
+                        chip->acc_sample_count_ch0 = 0;
+                        chip->acc_sample_count_ch1 = 0;
                         /* Run an immediate conversion */
                         run_conversion(chip);
                     }
@@ -242,6 +307,12 @@ static bool on_i2c_write(void *user_data, uint8_t data) {
                 } else if (reg == REG_ALERT_LOW_FLAGS || reg == REG_ALERT_HIGH_FLAGS) {
                     /* Write-1-to-clear */
                     chip->regs[reg] &= ~data;
+                    /* Re-evaluate alert pin after clearing flags */
+                    if (chip->regs[REG_ALERT_LOW_FLAGS] == 0 &&
+                        chip->regs[REG_ALERT_HIGH_FLAGS] == 0) {
+                        pin_write(chip->pin_alert, HIGH);
+                        chip->alert_triggered = false;
+                    }
                 } else {
                     chip->regs[reg] = data;
                 }
@@ -272,6 +343,14 @@ static void on_i2c_disconnect(void *user_data) {
 
 /* ── Conversion Logic ───────────────────────────────────────────── */
 
+static void push_fifo_sample(chip_state_t *chip, uint16_t sample) {
+    if (chip->fifo_count < FIFO_MAX_SAMPLES) {
+        chip->fifo[chip->fifo_count * 2]     = (sample >> 8) & 0xFF;
+        chip->fifo[chip->fifo_count * 2 + 1] =  sample       & 0xFF;
+        chip->fifo_count++;
+    }
+}
+
 static void run_conversion(chip_state_t *chip) {
     float v0 = attr_read_float(chip->attr_v0);
     float v1 = attr_read_float(chip->attr_v1);
@@ -279,61 +358,88 @@ static void run_conversion(chip_state_t *chip) {
     uint16_t adc0 = voltage_to_adc(v0);
     uint16_t adc1 = voltage_to_adc(v1);
 
-    uint8_t ch_en   = chip->regs[REG_AUTO_SEQ_CHEN];
+    uint8_t ch_en    = chip->regs[REG_AUTO_SEQ_CHEN];
     uint8_t dout_fmt = chip->regs[REG_DOUT_FORMAT_CFG];
+    uint8_t dbuf_mode = chip->regs[REG_DATA_BUFFER_OPMODE];
 
-    chip->fifo_count  = 0;
-    chip->fifo_rd_idx = 0;
-
-    /* CH0 */
-    if (ch_en & 0x01) {
-        uint16_t sample;
-        if (dout_fmt == 0x02) {
-            /* Format 2: [12-bit ADC][3-bit chID=000][DATA_VALID=1] */
-            sample = (adc0 << 4) | (0 << 1) | 1;
-        } else {
-            /* Default: 12-bit left-aligned */
-            sample = adc0 << 4;
-        }
-        chip->fifo[chip->fifo_count * 2]     = (sample >> 8) & 0xFF;
-        chip->fifo[chip->fifo_count * 2 + 1] =  sample       & 0xFF;
-        chip->fifo_count++;
+    /* In pre-alert mode, stop filling FIFO after alert triggers */
+    if (dbuf_mode == DBUF_PRE_ALERT && chip->alert_triggered) {
+        return;
     }
 
-    /* CH1 */
-    if (ch_en & 0x02) {
-        uint16_t sample;
-        if (dout_fmt == 0x02) {
-            /* Format 2: [12-bit ADC][3-bit chID=001][DATA_VALID=1] */
-            sample = (adc1 << 4) | (1 << 1) | 1;
-        } else {
-            sample = adc1 << 4;
-        }
-        chip->fifo[chip->fifo_count * 2]     = (sample >> 8) & 0xFF;
-        chip->fifo[chip->fifo_count * 2 + 1] =  sample       & 0xFF;
-        chip->fifo_count++;
+    /* In stop-burst mode, don't push samples to FIFO */
+    bool push_to_fifo = (dbuf_mode != DBUF_STOP_BURST);
+
+    /* In post-alert mode, only start filling FIFO after an alert */
+    if (dbuf_mode == DBUF_POST_ALERT && !chip->alert_triggered) {
+        push_to_fifo = false;
     }
 
-    /* Update status registers */
+    if (push_to_fifo) {
+        /* CH0 */
+        if (ch_en & 0x01) {
+            uint16_t sample;
+            if (dout_fmt == 0x02) {
+                /* Format 2: [12-bit ADC][3-bit chID=000][DATA_VALID=1] */
+                sample = (adc0 << 4) | (0 << 1) | 1;
+            } else {
+                /* Default: 12-bit left-aligned */
+                sample = adc0 << 4;
+            }
+            push_fifo_sample(chip, sample);
+        }
+
+        /* CH1 */
+        if (ch_en & 0x02) {
+            uint16_t sample;
+            if (dout_fmt == 0x02) {
+                /* Format 2: [12-bit ADC][3-bit chID=001][DATA_VALID=1] */
+                sample = (adc1 << 4) | (1 << 1) | 1;
+            } else {
+                sample = adc1 << 4;
+            }
+            push_fifo_sample(chip, sample);
+        }
+    }
+
+    /* Update data buffer status */
     chip->regs[REG_DATA_BUFFER_STATUS] = chip->fifo_count;
 
-    /* Accumulator */
-    if (chip->regs[REG_ACC_EN] & 0x01) {
-        chip->regs[REG_ACC_CH0_LSB] =  adc0       & 0xFF;
-        chip->regs[REG_ACC_CH0_MSB] = (adc0 >> 8) & 0x0F;
+    /* ── Accumulator ──────────────────────────────────────────────── */
+    uint8_t acc_en = chip->regs[REG_ACC_EN];
+    uint8_t acc_target = acc_num_samples(acc_en);
+
+    if (acc_en & 0x01) {
+        chip->acc_ch0 += adc0;
+        chip->acc_sample_count_ch0++;
+        if (chip->acc_sample_count_ch0 >= acc_target) {
+            chip->regs[REG_ACC_CH0_LSB] =  chip->acc_ch0       & 0xFF;
+            chip->regs[REG_ACC_CH0_MSB] = (chip->acc_ch0 >> 8) & 0xFF;
+            chip->regs[REG_ACCUMULATOR_STATUS] |= 0x01; /* CH0 data ready */
+            chip->acc_ch0 = 0;
+            chip->acc_sample_count_ch0 = 0;
+        }
     }
-    if (chip->regs[REG_ACC_EN] & 0x02) {
-        chip->regs[REG_ACC_CH1_LSB] =  adc1       & 0xFF;
-        chip->regs[REG_ACC_CH1_MSB] = (adc1 >> 8) & 0x0F;
+    if (acc_en & 0x02) {
+        chip->acc_ch1 += adc1;
+        chip->acc_sample_count_ch1++;
+        if (chip->acc_sample_count_ch1 >= acc_target) {
+            chip->regs[REG_ACC_CH1_LSB] =  chip->acc_ch1       & 0xFF;
+            chip->regs[REG_ACC_CH1_MSB] = (chip->acc_ch1 >> 8) & 0xFF;
+            chip->regs[REG_ACCUMULATOR_STATUS] |= 0x02; /* CH1 data ready */
+            chip->acc_ch1 = 0;
+            chip->acc_sample_count_ch1 = 0;
+        }
     }
 
-    /* OPMODE_I2CMODE_STATUS: bit 5..4 = opmode echoed, bit 0 = BUSY */
-    chip->regs[REG_OPMODE_STATUS] = (chip->regs[REG_OPMODE_SEL] & 0x07) << 4;
+    /* OPMODE_I2CMODE_STATUS: bit 5..4 = opmode echoed, bit 0 = I2C mode active */
+    chip->regs[REG_OPMODE_STATUS] =
+        ((chip->regs[REG_OPMODE_SEL] & 0x07) << 4) | (chip->sequence_running ? 0x01 : 0x00);
 
     check_alerts(chip, adc0, adc1);
 }
 
-/* ── Digital Window Comparator ──────────────────────────────────── */
+/* ── Digital Window Comparator (with hysteresis) ────────────────── */
 
 static void check_alerts(chip_state_t *chip, uint16_t adc0, uint16_t adc1) {
     if (!(chip->regs[REG_ALERT_DWC_EN] & 0x01)) {
@@ -341,7 +447,7 @@ static void check_alerts(chip_state_t *chip, uint16_t adc0, uint16_t adc1) {
         return;
     }
 
-    bool alert = false;
+    bool alert_now = false;
 
     /* ── CH0 ──────────────────────────────────────────────────────── */
     if (chip->regs[REG_ALERT_CHEN] & 0x01) {
@@ -349,16 +455,24 @@ static void check_alerts(chip_state_t *chip, uint16_t adc0, uint16_t adc1) {
                      | chip->regs[REG_DWC_HTH_CH0_LSB];
         uint16_t lth = ((uint16_t)chip->regs[REG_DWC_LTH_CH0_MSB] << 8)
                      | chip->regs[REG_DWC_LTH_CH0_LSB];
+        uint16_t hys = chip->regs[REG_DWC_HYS_CH0];
 
-        if (adc0 > hth) {
+        /* High threshold with hysteresis:
+           Alert sets when adc > hth, clears when adc < (hth - hys) */
+        bool was_high = (chip->regs[REG_ALERT_HIGH_FLAGS] & 0x01) != 0;
+        if (adc0 > hth || (was_high && hys > 0 && adc0 >= (hth > hys ? hth - hys : 0))) {
             chip->regs[REG_ALERT_HIGH_FLAGS] |= 0x01;
             chip->regs[REG_ALERT_TRIG_CHID]  |= 0x01;
-            alert = true;
+            alert_now = true;
         }
-        if (adc0 < lth) {
+
+        /* Low threshold with hysteresis:
+           Alert sets when adc < lth, clears when adc > (lth + hys) */
+        bool was_low = (chip->regs[REG_ALERT_LOW_FLAGS] & 0x01) != 0;
+        if (adc0 < lth || (was_low && hys > 0 && adc0 <= (uint16_t)(lth + hys))) {
             chip->regs[REG_ALERT_LOW_FLAGS]  |= 0x01;
             chip->regs[REG_ALERT_TRIG_CHID]  |= 0x01;
-            alert = true;
+            alert_now = true;
         }
     }
 
@@ -368,24 +482,49 @@ static void check_alerts(chip_state_t *chip, uint16_t adc0, uint16_t adc1) {
                      | chip->regs[REG_DWC_HTH_CH1_LSB];
         uint16_t lth = ((uint16_t)chip->regs[REG_DWC_LTH_CH1_MSB] << 8)
                      | chip->regs[REG_DWC_LTH_CH1_LSB];
+        uint16_t hys = chip->regs[REG_DWC_HYS_CH1];
 
-        if (adc1 > hth) {
+        bool was_high = (chip->regs[REG_ALERT_HIGH_FLAGS] & 0x02) != 0;
+        if (adc1 > hth || (was_high && hys > 0 && adc1 >= (hth > hys ? hth - hys : 0))) {
             chip->regs[REG_ALERT_HIGH_FLAGS] |= 0x02;
             chip->regs[REG_ALERT_TRIG_CHID]  |= 0x02;
-            alert = true;
+            alert_now = true;
         }
-        if (adc1 < lth) {
+
+        bool was_low = (chip->regs[REG_ALERT_LOW_FLAGS] & 0x02) != 0;
+        if (adc1 < lth || (was_low && hys > 0 && adc1 <= (uint16_t)(lth + hys))) {
             chip->regs[REG_ALERT_LOW_FLAGS]  |= 0x02;
             chip->regs[REG_ALERT_TRIG_CHID]  |= 0x02;
-            alert = true;
+            alert_now = true;
         }
     }
 
+    /* Pre-alert event counting: in Pre-Alert mode, track events before
+       actually triggering the ALERT pin. */
+    if (alert_now && !chip->alert_triggered) {
+        uint8_t dbuf_mode = chip->regs[REG_DATA_BUFFER_OPMODE];
+        if (dbuf_mode == DBUF_PRE_ALERT) {
+            uint8_t max_evt = chip->regs[REG_PRE_ALT_MAX_EVT_CNT];
+            /* max_evt encodes the count in the upper nibble: n = (max_evt >> 4) */
+            uint8_t threshold = (max_evt >> 4) & 0x0F;
+            if (threshold == 0) threshold = 1;
+            chip->pre_alert_evt_count++;
+            if (chip->pre_alert_evt_count < threshold) {
+                /* Not enough events yet — don't fire ALERT pin */
+                alert_now = false;
+            }
+        }
+    }
+
+    if (alert_now) {
+        chip->alert_triggered = true;
+    }
+
     /* ALERT is active-low */
-    pin_write(chip->pin_alert, alert ? LOW : HIGH);
+    pin_write(chip->pin_alert, chip->alert_triggered ? LOW : HIGH);
 }
 
-/* ── Timer Callback (periodic conversions) ──────────────────────── */
+/* ── Timer Callback (periodic conversions in autonomous mode) ──── */
 
 static void timer_callback(void *user_data) {
     chip_state_t *chip = (chip_state_t *)user_data;
@@ -404,6 +543,12 @@ static void reset_device(chip_state_t *chip) {
     chip->fifo_rd_idx      = 0;
     chip->state            = STATE_IDLE;
     chip->current_opcode   = 0;
+    chip->acc_ch0          = 0;
+    chip->acc_ch1          = 0;
+    chip->acc_sample_count_ch0 = 0;
+    chip->acc_sample_count_ch1 = 0;
+    chip->pre_alert_evt_count  = 0;
+    chip->alert_triggered      = false;
     pin_write(chip->pin_alert, HIGH);
     printf("ADS7142 Device Reset\n");
 }

@@ -37,6 +37,10 @@ typedef struct {
 
   // Timer for conversion
   timer_t conversion_timer;
+  
+  // Conversion state
+  bool conversion_in_progress;
+  uint32_t timer_interval_us; // Timer interval based on data rate
 
 } chip_state_t;
 
@@ -78,13 +82,23 @@ void chip_init(void) {
   chip->i2c_write_state = 0;
   chip->i2c_temp_val = 0;
   chip->i2c_read_byte_idx = 0;
+  
+  chip->conversion_in_progress = false;
+  chip->timer_interval_us = 10000; // Default 10ms
 
-  // Determine I2C address
-  // Simplified logic: assume ADDR connected to GND (0x48) if floating/low
-  // In a real simulation, we should check pin_read(chip->pin_addr) voltage.
-  // For now default to 0x48.
-  chip->i2c_addr = 0x48; 
-  // TODO: Check ADDR pin state to set 0x49, 0x4A, 0x4B
+  // Determine I2C address based on ADDR pin state
+  // GND: 0x48, VDD: 0x49, SDA: 0x4A, SCL: 0x4B
+  double addr_voltage = pin_adc_read(chip->pin_addr);
+  
+  if (addr_voltage < 0.5) {
+    chip->i2c_addr = 0x48; // ADDR tied to GND
+  } else if (addr_voltage > 4.5) {
+    chip->i2c_addr = 0x49; // ADDR tied to VDD
+  } else if (addr_voltage > 2.5) {
+    chip->i2c_addr = 0x4A; // ADDR tied to SDA
+  } else {
+    chip->i2c_addr = 0x4B; // ADDR tied to SCL
+  }
 
   const i2c_config_t i2c_config = {
     .user_data = chip,
@@ -104,14 +118,31 @@ void chip_init(void) {
   };
   chip->conversion_timer = timer_init(&timer_config);
   
-  // Start continuous conversion simulation loop (simplified)
-  timer_start(chip->conversion_timer, 10000, true); // Update every 10ms
+  // Calculate initial timer interval from data rate (bits 7:5)
+  uint8_t dr = (chip->config_reg >> 5) & 0x07;
+  uint32_t dr_table[] = {125000, 62500, 31250, 15625, 7812, 4000, 2105, 1163}; // microseconds per sample
+  chip->timer_interval_us = dr_table[dr];
+  
+  // Start timer
+  timer_start(chip->conversion_timer, chip->timer_interval_us, true);
 
   // printf("ADS1115 Chip Initialized at 0x%02X\n", chip->i2c_addr);
 }
 
 static void chip_timer_callback(void *user_data) {
   chip_state_t *chip = (chip_state_t *)user_data;
+  
+  // Check device mode (bit 8)
+  uint8_t mode = (chip->config_reg >> 8) & 0x01;
+  
+  // In single-shot mode, only convert if OS bit (bit 15) is set or conversion in progress
+  if (mode == 1) { // Single-shot mode
+    if (!chip->conversion_in_progress && !((chip->config_reg >> 15) & 0x01)) {
+      // No conversion requested
+      return;
+    }
+  }
+  // In continuous mode, always convert
   
   // 1. Read input based on CONFIG register MUX bits [14:12]
   //    000 : AIN0 - AIN1
@@ -165,8 +196,12 @@ static void chip_timer_callback(void *user_data) {
   
   chip->conversion_reg = (uint16_t)raw_val;
   
-  // If single-shot mode, bit 15 (OS) should be set to 1 when done.
-  // If continuous mode, just keep updating.
+  // In single-shot mode, clear OS bit after conversion and set conversion_in_progress to false
+  if (mode == 1) { // Single-shot mode
+    chip->config_reg &= ~(1 << 15); // Clear OS bit (bit 15)
+    chip->conversion_in_progress = false;
+  }
+  // In continuous mode, just keep updating.
 }
 
 
@@ -238,8 +273,18 @@ static bool on_i2c_write(void *user_data, uint8_t data) {
     }
     
     // Check if OS bit (bit 15) is 1 in config to start a single shot conversion
-    if (chip->address_ptr == REG_CONFIG && (chip->i2c_temp_val & 0x8000)) {
-       // Start conversion logic if needed immediately
+    if (chip->address_ptr == REG_CONFIG) {
+      uint8_t new_mode = (chip->i2c_temp_val >> 8) & 0x01;
+      uint8_t new_dr = (chip->i2c_temp_val >> 5) & 0x07;
+      
+      // Update data rate timer if changed
+      uint32_t dr_table[] = {125000, 62500, 31250, 15625, 7812, 4000, 2105, 1163};
+      chip->timer_interval_us = dr_table[new_dr];
+      
+      // If OS bit is set (bit 15), start single-shot conversion
+      if ((chip->i2c_temp_val & 0x8000)) {
+        chip->conversion_in_progress = true;
+      }
     }
 
     // After writing 2 bytes, if master continues, what happens?

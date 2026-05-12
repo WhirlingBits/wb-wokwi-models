@@ -2,16 +2,46 @@
   "name": "ads1115",
   "author": "WhirlingBits",
   "pins": [
-    "VDD",
-    "GND",
-    "SCL",
-    "SDA",
-    "ADDR",
-    "ALRT",
-    "A0",
-    "A1",
-    "A2",
-    "A3"
+    {
+      "name": "VDD",
+      "description": "Power supply (+3.3V to +5V)"
+    },
+    {
+      "name": "GND",
+      "description": "Ground"
+    },
+    {
+      "name": "SCL",
+      "description": "I2C Clock line"
+    },
+    {
+      "name": "SDA",
+      "description": "I2C Data line"
+    },
+    {
+      "name": "ADDR",
+      "description": "I2C Address Selection (GND=0x48, VDD=0x49, SDA=0x4A, SCL=0x4B)"
+    },
+    {
+      "name": "ALRT",
+      "description": "Alert/Ready output"
+    },
+    {
+      "name": "A0",
+      "description": "Analog Input 0 (0-5V, ADC settable)"
+    },
+    {
+      "name": "A1",
+      "description": "Analog Input 1 (0-5V, ADC settable)"
+    },
+    {
+      "name": "A2",
+      "description": "Analog Input 2 (0-5V, ADC settable)"
+    },
+    {
+      "name": "A3",
+      "description": "Analog Input 3 (0-5V, ADC settable)"
+    }
   ],
   "controls": [
     {
@@ -50,5 +80,6 @@
       "id": "v3",
       "format": "volt"
     }
-  ]
+  ],
+  "notes": "I2C Address Selection: Connect ADDR pin to GND (0x48), VDD (0x49), SDA (0x4A), or SCL (0x4B). Default: 0x48 when floating/low."
 }

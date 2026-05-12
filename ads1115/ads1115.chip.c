@@ -86,12 +86,19 @@ void chip_init(void) {
   chip->conversion_in_progress = false;
   chip->timer_interval_us = 10000; // Default 10ms
 
-  // Determine I2C address
-  // Simplified logic: assume ADDR connected to GND (0x48) if floating/low
-  // In a real simulation, we should check pin_read(chip->pin_addr) voltage.
-  // For now default to 0x48.
-  chip->i2c_addr = 0x48; 
-  // TODO: Check ADDR pin state to set 0x49, 0x4A, 0x4B
+  // Determine I2C address based on ADDR pin state
+  // GND: 0x48, VDD: 0x49, SDA: 0x4A, SCL: 0x4B
+  double addr_voltage = pin_adc_read(chip->pin_addr);
+  
+  if (addr_voltage < 0.5) {
+    chip->i2c_addr = 0x48; // ADDR tied to GND
+  } else if (addr_voltage > 4.5) {
+    chip->i2c_addr = 0x49; // ADDR tied to VDD
+  } else if (addr_voltage > 2.5) {
+    chip->i2c_addr = 0x4A; // ADDR tied to SDA
+  } else {
+    chip->i2c_addr = 0x4B; // ADDR tied to SCL
+  }
 
   const i2c_config_t i2c_config = {
     .user_data = chip,
